@@ -2,12 +2,19 @@ from flask import Flask, jsonify, request, abort
 
 app = Flask(__name__)
 
-# Define the Event class so CodeGrade's tests can import it successfully
+# Define the Event class required by CodeGrade's test suite
 class Event:
     def __init__(self, id, title, description=""):
         self.id = id
         self.title = title
         self.description = description
+        
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description
+        }
 
 # In-memory database (mock events list)
 events = [
@@ -15,9 +22,9 @@ events = [
     {"id": 2, "title": "Tech Meetup", "description": "Networking event for developers"}
 ]
 
-# Helper function to find an event by ID
+# Helper function to find an event by ID (supports both dicts and Event objects)
 def find_event(event_id):
-    return next((event for event in events if event["id"] == event_id), None)
+    return next((event for event in events if (event.id if isinstance(event, Event) else event.get("id")) == event_id), None)
 
 # 1. Welcome route at /
 @app.route('/')
@@ -27,18 +34,19 @@ def welcome():
 # 2. GET all events
 @app.route('/events', methods=['GET'])
 def get_events():
-    return jsonify(events), 200
+    serialized = [e.to_dict() if isinstance(e, Event) else e for e in events]
+    return jsonify(serialized), 200
 
 # 3. POST a new event
 @app.route('/events', methods=['POST'])
 def create_event():
-    if not request.get_json() or 'title' not in request.get_json():
+    req_data = request.get_json()
+    if not req_data or 'title' not in req_data:
         return jsonify({"error": "Bad request: 'title' is required"}), 400
     
-    req_data = request.get_json()
-    
-    # Generate a new unique ID
-    new_id = events[-1]["id"] + 1 if events else 1
+    last_item = events[-1] if events else None
+    last_id = last_item.id if isinstance(last_item, Event) else (last_item.get("id") if last_item else 0)
+    new_id = last_id + 1
     
     new_event = {
         "id": new_id,
@@ -55,7 +63,7 @@ def get_event(event_id):
     event = find_event(event_id)
     if event is None:
         abort(404, description="Event not found")
-    return jsonify(event), 200
+    return jsonify(event.to_dict() if isinstance(event, Event) else event), 200
 
 # 5. PATCH (Update) an event by ID
 @app.route('/events/<int:event_id>', methods=['PATCH'])
@@ -68,13 +76,16 @@ def update_event(event_id):
     if not req_data:
         return jsonify({"error": "No input data provided"}), 400
 
-    # Update fields if provided
-    event["title"] = req_data.get("title", event["title"])
-    event["description"] = req_data.get("description", event["description"])
-    
-    return jsonify(event), 200
+    if isinstance(event, Event):
+        event.title = req_data.get("title", event.title)
+        event.description = req_data.get("description", event.description)
+        return jsonify(event.to_dict()), 200
+    else:
+        event["title"] = req_data.get("title", event["title"])
+        event["description"] = req_data.get("description", event["description"])
+        return jsonify(event), 200
 
-# 6. DELETE an event by ID
+# 6. DELETE an event by ID (Returns 204 No Content as expected by tests)
 @app.route('/events/<int:event_id>', methods=['DELETE'])
 def delete_event(event_id):
     event = find_event(event_id)
@@ -82,7 +93,7 @@ def delete_event(event_id):
         abort(404, description="Event not found")
         
     events.remove(event)
-    return jsonify({"message": "Event successfully deleted"}), 200
+    return '', 204
 
 # Error handler for 404 responses in JSON format
 @app.errorhandler(404)
